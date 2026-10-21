@@ -85,10 +85,8 @@ static void scanClasses(void) {
 }
 
 // ---------------- 字典拦截：把 JSON 里的 ecpm / cpm 键读出来改成 50000 ----------------
-static Class gDictCls[16];
-static IMP   gDictOrig[16];
-static int   gDictCount = 0;
-static long  gDictHits = 0;
+static IMP  gOrigObjForKey = NULL;
+static long gDictHits = 0;
 
 static BOOL keyWanted(NSString *k) {
     if (![k isKindOfClass:[NSString class]]) return NO;
@@ -104,17 +102,13 @@ static BOOL keyWanted(NSString *k) {
 }
 
 static id hookObjectForKey(id self, SEL _cmd, id key) {
-    Class c = object_getClass(self);
-    IMP orig = NULL;
-    for (int i = 0; i < gDictCount; i++) {
-        if (gDictCls[i] == c) { orig = gDictOrig[i]; break; }
-    }
-    if (!orig) return nil;
-    id v = ((id (*)(id, SEL, id))orig)(self, _cmd, key);
+    if (!gOrigObjForKey) return nil;
+    id v = ((id (*)(id, SEL, id))gOrigObjForKey)(self, _cmd, key);
+    if (!v) return v;
+    if (![v isKindOfClass:[NSNumber class]]) return v;   // 只改数值，字符串原样放过
     if (keyWanted((NSString *)key)) {
         gDictHits++;
-        double base = [v isKindOfClass:[NSNumber class]] ? [v doubleValue] : 0;
-        return @( applyValue(base) );
+        return @( applyValue([v doubleValue]) );
     }
     return v;
 }
@@ -123,21 +117,19 @@ static void hookDictionaries(void) {
     NSArray *names = @[@"__NSDictionaryI", @"__NSDictionaryM", @"__NSDictionary0",
                        @"NSDictionary", @"NSMutableDictionary"];
     SEL sel = @selector(objectForKey:);
+    int cnt = 0;
     for (NSString *n in names) {
         Class c = NSClassFromString(n);
         if (!c) continue;
         Method m = class_getInstanceMethod(c, sel);
         if (!m) continue;
-        IMP orig = method_getImplementation(m);
-        if ((void *)orig == (void *)hookObjectForKey) continue;
-        if (gDictCount < 16) {
-            gDictCls[gDictCount] = c;
-            gDictOrig[gDictCount] = orig;
-            gDictCount++;
-        }
+        IMP cur = method_getImplementation(m);
+        if ((void *)cur == (void *)hookObjectForKey) continue;
+        if (!gOrigObjForKey) gOrigObjForKey = cur;
         method_setImplementation(m, (IMP)hookObjectForKey);
+        cnt++;
     }
-    ecpmLog([NSString stringWithFormat:@"字典拦截已挂 %d 个类", gDictCount]);
+    ecpmLog([NSString stringWithFormat:@"字典拦截已挂 %d 个类", cnt]);
 }
 
 // ---------------- 悬浮面板 ----------------
