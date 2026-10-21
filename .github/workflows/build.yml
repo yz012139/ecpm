@@ -14,45 +14,50 @@ jobs:
       - name: 安装依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y make git curl unzip xz-utils libssl-dev libplist-dev zstd clang lld libtinfo6 || true
-          sudo apt-get install -y ldid || true
-          clang --version || true
-
-      - name: 安装 Theos
-        run: |
-          git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
-          chmod +x "$HOME/theos/bin/"* || true
-          ls "$HOME/theos/bin" || true
+          sudo apt-get install -y clang lld make curl unzip xz-utils
+          clang --version | head -2
+          ls /usr/bin/ld64.lld || true
 
       - name: 下载 iOS SDK
         run: |
-          curl -L -o /tmp/sdks.zip https://github.com/theos/sdks/archive/master.zip || \
+          mkdir -p "$HOME/sdk"
           curl -L -o /tmp/sdks.zip https://codeload.github.com/theos/sdks/zip/refs/heads/master
           unzip -q /tmp/sdks.zip -d /tmp
-          mkdir -p "$HOME/theos/sdks"
-          cp -r /tmp/sdks-master/*.sdk "$HOME/theos/sdks/" || true
-          ls "$HOME/theos/sdks" | head
+          cp -r /tmp/sdks-master/iPhoneOS14.5.sdk "$HOME/sdk/" 2>/dev/null || \
+          cp -r /tmp/sdks-master/*.sdk "$HOME/sdk/"
+          ls "$HOME/sdk"
 
-      - name: 编译 dylib
+      - name: 编译 arm64 + arm64e
         run: |
-          export THEOS="$HOME/theos"
-          export PATH="$THEOS/bin:$PATH"
-          cd theos
-          make clean || true
-          make -j4 V=1 2>&1 | tee build.log
-          echo "---- exit: $? ----"
-          find .theos -name "*.dylib" -print || true
+          SDK="$HOME/sdk/iPhoneOS14.5.sdk"
+          for ARCH in arm64 arm64e; do
+            echo "==== $ARCH ===="
+            clang -target ${ARCH}-apple-ios14.0 -isysroot "$SDK" -dynamiclib \
+              -fobjc-arc -fblocks -O2 -fno-stack-protector \
+              -framework UIKit -framework Foundation -framework CoreGraphics \
+              -Wl,-undefined,dynamic_lookup \
+              -Wl,-install_name,@rpath/EcpmCtrl.dylib \
+              -o "EcpmCtrl-$ARCH.dylib" theos/Tweak.xm
+          done
+          ls -la *.dylib
 
-      - name: 列出产物
+      - name: 合并成 fat dylib
         run: |
-          find theos/.theos -name "*.dylib" -print || true
+          if [ -f EcpmCtrl-arm64.dylib ] && [ -f EcpmCtrl-arm64e.dylib ]; then
+            (command -v lipo >/dev/null && lipo -create EcpmCtrl-arm64.dylib EcpmCtrl-arm64e.dylib -output EcpmCtrl.dylib) || \
+            cp EcpmCtrl-arm64.dylib EcpmCtrl.dylib
+          else
+            cp EcpmCtrl-arm64.dylib EcpmCtrl.dylib
+          fi
+          ls -la EcpmCtrl.dylib
+          file EcpmCtrl.dylib || true
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: EcpmCtrl-dylib
           path: |
-            theos/.theos/obj/**/*.dylib
-            theos/.theos/obj/*.dylib
-            theos/build.log
-          if-no-files-found: warn
+            EcpmCtrl.dylib
+            EcpmCtrl-arm64.dylib
+            EcpmCtrl-arm64e.dylib
+          if-no-files-found: error
