@@ -26,6 +26,8 @@ static double applyValue(double orig) { return (gMode == 1) ? (orig + gValue) : 
 
 static double hookD(id self, SEL _cmd) { gHits++; return applyValue(0); }
 static float  hookF(id self, SEL _cmd) { gHits++; return (float)applyValue(0); }
+static long long hookQ(id self, SEL _cmd) { gHits++; return (long long)applyValue(0); }
+static int    hookI(id self, SEL _cmd) { gHits++; return (int)applyValue(0); }
 static id     hookN(id self, SEL _cmd) { gHits++; return @( applyValue(0) ); }
 
 static BOOL isCandidateName(NSString *n) {
@@ -69,7 +71,9 @@ static void scanClasses(void) {
                 char rt = types[0];
                 if (rt == 'd') { method_setImplementation(methods[j], (IMP)hookD); n++; }
                 else if (rt == 'f') { method_setImplementation(methods[j], (IMP)hookF); n++; }
-                else if (rt == '@') { method_setImplementation(methods[j], (IMP)hookN); n++; }
+                else if (rt == 'q') { method_setImplementation(methods[j], (IMP)hookQ); n++; }
+                else if (rt == 'i') { method_setImplementation(methods[j], (IMP)hookI); n++; }
+                /* 返回对象（'@'）的方法一律不碰：类型对不上会直接把 App 弄崩 */
             }
             free(methods);
             if (n) { clsCount++; gHooked += n; }
