@@ -29,7 +29,7 @@ static volatile long gHits    = 0;        // getter 被调用次数
 static volatile long gWrites  = 0;        // 实际改写次数
 static char gLastCls[96] = "—";
 static char gLastSel[96] = "";
-static BOOL gSafeMode = NO;               // 安全模式：只挂旧表 9 条
+static NSInteger gScope = 1;              // 0=全部80条 1=只ecpm+cpm 2=旧表9条(安全)
 
 static long gCandidateClasses = 0;        // 类名前缀命中的类数（面板 类X/31 的分母）
 static long gMatchedClasses   = 0;        // 真正挂上方法的类数（分子）
@@ -173,6 +173,21 @@ static BOOL IsCandidateClass(NSString *name) {
     return NO;
 }
 
+// 范围过滤：决定这条规则要不要挂
+static BOOL ScopeAllows(NSString *clsName, const EcpmRule *r) {
+    if (gScope == 2) return r->legacy;              // 安全：只旧表 9 条
+    if (gScope == 1) {
+        // 只 ecpm/cpm：不碰 price/bid/winprice，竞价请求和底价计算就不会被改坏
+        if (strcmp(r->key, "ecpm") != 0 && strcmp(r->key, "cpm") != 0) return NO;
+        NSString *low = clsName.lowercaseString;
+        if ([low containsString:@"request"] || [low containsString:@"param"] ||
+            [low containsString:@"config"] || [low containsString:@"setting"] ||
+            [low containsString:@"bidding"] || [low containsString:@"slot"]) return NO;
+        return YES;
+    }
+    return YES;                                     // 全部 80 条
+}
+
 static BOOL HookOne(Class cls, Method m, const EcpmRule *rule, int ruleIndex) {
     const char *selName = sel_getName(method_getName(m));
     if (strchr(selName, ':')) return NO;                 // 只挂无参 getter
@@ -235,7 +250,7 @@ static BOOL HookClass(Class cls, NSString *name) {
             const char *selName = sel_getName(method_getName(ms[i]));
             const EcpmRule *rule = RuleFor(name, selName);
             if (!rule) continue;
-            if (gSafeMode && !rule->legacy) continue;   // 安全模式：只挂旧表 9 条
+            if (!ScopeAllows(name, rule)) continue;   // 按当前范围过滤
             int idx = (int)(rule - kRules);
             if (HookOne(target, ms[i], rule, idx)) any = YES;
         }
@@ -299,6 +314,7 @@ static UIWindow *gPrevKeyWindow = nil;
 @property (nonatomic, strong) UILabel     *line5;   // 最近 ABUAdPackage.ecpm
 @property (nonatomic, strong) UIButton    *modeBtn;
 @property (nonatomic, strong) UIButton    *logBtn;
+@property (nonatomic, strong) UIButton    *scopeBtn;
 + (instancetype)shared;
 - (void)showBubble;
 - (void)openCard;
@@ -383,18 +399,11 @@ static EcpmPanel *gPanel = nil;
     w.hidden = NO;
 }
 
-// 长按球 = 安全模式开关（只挂旧表 9 条，闪退时用来定位）
+// 长按球 = 循环切范围（全部 -> 只ecpm -> 安全9条），没广告时的快捷开关
 - (void)toggleSafe:(UILongPressGestureRecognizer *)g {
     if (g.state != UIGestureRecognizerStateBegan) return;
-    gSafeMode = !gSafeMode;
-    [NSUserDefaults.standardUserDefaults setBool:gSafeMode forKey:@"EcpmCtrl38.safe"];
-    ResetHooks();
-    if (gLogOn) NSLog(@"[eCPM] 安全模式 %@", gSafeMode ? @"开" : @"关");
-    __weak typeof(self) weakSelf = self;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        ScanClasses();
-        dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf refresh]; });
-    });
+    if (!self.card) [self buildCard];
+    [self cycleScope];
 }
 
 - (void)openCard {
@@ -409,7 +418,7 @@ static EcpmPanel *gPanel = nil;
     UIWindowScene *sc = [self scene];
     if (!sc) return;
 
-    CGFloat W = 320, H = 436;
+    CGFloat W = 320, H = 452;
     UIWindow *w = [[UIWindow alloc] initWithWindowScene:sc];
     w.frame = CGRectMake((UIScreen.mainScreen.bounds.size.width - W) / 2, 70, W, H);
     w.windowLevel = UIWindowLevelAlert + 3;
@@ -463,23 +472,37 @@ static EcpmPanel *gPanel = nil;
     [rescan addTarget:self action:@selector(rescan) forControlEvents:UIControlEventTouchUpInside];
     [box addSubview:rescan];
 
+    // 范围：全部80条 / 只 ecpm+cpm / 安全(旧表9条)。没广告时先切「只ecpm」
+    self.scopeBtn = [self button:[self scopeTitle] frame:CGRectMake(16, 152, 150, 32)
+                           color:[UIColor colorWithRed:0.55 green:0.4 blue:0.85 alpha:1]];
+    self.scopeBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+    [self.scopeBtn addTarget:self action:@selector(cycleScope) forControlEvents:UIControlEventTouchUpInside];
+    [box addSubview:self.scopeBtn];
+
+    // 一键还原：把挂过的 IMP 全还回去，停用改写
+    UIButton *restore = [self button:@"还原全部" frame:CGRectMake(174, 152, 130, 32)
+                               color:[UIColor colorWithRed:0.85 green:0.25 blue:0.2 alpha:1]];
+    restore.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+    [restore addTarget:self action:@selector(restoreAll) forControlEvents:UIControlEventTouchUpInside];
+    [box addSubview:restore];
+
     UIColor *green = [UIColor colorWithRed:0.5 green:0.92 blue:0.62 alpha:1];
-    self.line0 = [self label:@"" frame:CGRectMake(16, 158, W - 32, 16) size:11.5 color:green bold:NO];
-    self.line1 = [self label:@"" frame:CGRectMake(16, 176, W - 32, 16) size:11.5 color:green bold:NO];
-    self.line2 = [self label:@"" frame:CGRectMake(16, 194, W - 32, 16) size:11.5 color:green bold:NO];
-    self.line3 = [self label:@"" frame:CGRectMake(16, 212, W - 32, 16) size:11.5 color:green bold:NO];
-    self.line4 = [self label:@"" frame:CGRectMake(16, 230, W - 32, 16) size:11.5 color:green bold:NO];
-    self.line5 = [self label:@"" frame:CGRectMake(16, 248, W - 32, 16) size:11.5 color:[UIColor colorWithRed:0.95 green:0.75 blue:0.35 alpha:1] bold:NO];
+    self.line0 = [self label:@"" frame:CGRectMake(16, 192, W - 32, 16) size:11.5 color:green bold:NO];
+    self.line1 = [self label:@"" frame:CGRectMake(16, 210, W - 32, 16) size:11.5 color:green bold:NO];
+    self.line2 = [self label:@"" frame:CGRectMake(16, 228, W - 32, 16) size:11.5 color:green bold:NO];
+    self.line3 = [self label:@"" frame:CGRectMake(16, 246, W - 32, 16) size:11.5 color:green bold:NO];
+    self.line4 = [self label:@"" frame:CGRectMake(16, 264, W - 32, 16) size:11.5 color:green bold:NO];
+    self.line5 = [self label:@"" frame:CGRectMake(16, 282, W - 32, 16) size:11.5 color:[UIColor colorWithRed:0.95 green:0.75 blue:0.35 alpha:1] bold:NO];
     for (UILabel *l in @[self.line0, self.line1, self.line2, self.line3, self.line4, self.line5]) [box addSubview:l];
 
-    [box addSubview:[self label:@"范围：28万表 —— 只挂28万那80条 类名+方法名（旧表9条已含在其中，并集就是80条），表外的类一个都不碰；进程里没有的类自动跳过。改完点应用，再让游戏刷一次广告或重进页面；一次只装一个版本"
-                        frame:CGRectMake(16, 272, W - 32, 92) size:9.5 color:[UIColor colorWithWhite:0.58 alpha:1] bold:NO]];
+    [box addSubview:[self label:@"范围：28万表 —— 80条规则；没广告就把范围切「只ecpm」，还不行点「还原全部」。表外的类一个都不碰，进程里没有的类自动跳过；改完点应用，再让游戏刷一次广告。"
+                        frame:CGRectMake(16, 300, W - 32, 86) size:9.5 color:[UIColor colorWithWhite:0.58 alpha:1] bold:NO]];
 
-    UIButton *fold = [self button:@"收起" frame:CGRectMake(16, 376, 140, 36) color:[UIColor darkGrayColor]];
+    UIButton *fold = [self button:@"收起" frame:CGRectMake(16, 400, 140, 36) color:[UIColor darkGrayColor]];
     [fold addTarget:self action:@selector(fold) forControlEvents:UIControlEventTouchUpInside];
     [box addSubview:fold];
 
-    UIButton *hist = [self button:@"版本历史记录" frame:CGRectMake(164, 376, 140, 36)
+    UIButton *hist = [self button:@"版本历史记录" frame:CGRectMake(164, 400, 140, 36)
                             color:[UIColor colorWithWhite:0.22 alpha:1]];
     hist.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [hist addTarget:self action:@selector(history) forControlEvents:UIControlEventTouchUpInside];
@@ -494,9 +517,9 @@ static EcpmPanel *gPanel = nil;
 }
 
 - (void)refresh {
-    self.line0.text = [NSString stringWithFormat:@"范围：28万表   模式：%@   日志：%@%@",
-                       (gMode == 0 ? @"替换" : @"叠加"), (gLogOn ? @"开" : @"关"),
-                       (gSafeMode ? @"   安全模式" : @"")];
+    NSString *scopeName = (gScope == 0 ? @"全部" : (gScope == 1 ? @"只ecpm" : @"安全"));
+    self.line0.text = [NSString stringWithFormat:@"范围：28万表   模式：%@   日志：%@   范围:%@",
+                       (gMode == 0 ? @"替换" : @"叠加"), (gLogOn ? @"开" : @"关"), scopeName];
     self.line1.text = [NSString stringWithFormat:@"范围：28万表80条（旧9+新71）· 类%ld／%ld · 已挂%d/80",
                        gMatchedClasses, gCandidateClasses, gSlotCount];
     self.line2.text = [NSString stringWithFormat:@"旧表9条 %ld/9", gLegacyHooked];
@@ -564,6 +587,37 @@ static EcpmPanel *gPanel = nil;
     [self refresh];
 }
 
+- (NSString *)scopeTitle {
+    if (gScope == 0) return @"范围:全部80条";
+    if (gScope == 1) return @"范围:只ecpm";
+    return @"范围:安全9条";
+}
+
+// 切范围：先还原已挂 IMP，再按新范围重扫
+- (void)cycleScope {
+    gScope = (gScope + 1) % 3;
+    [NSUserDefaults.standardUserDefaults setInteger:gScope forKey:@"EcpmCtrl38.scope"];
+    [self.scopeBtn setTitle:[self scopeTitle] forState:UIControlStateNormal];
+    ResetHooks();
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        ScanClasses();
+        dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf refresh]; });
+    });
+    [self refresh];
+    if (gLogOn) NSLog(@"[eCPM] 范围 -> %ld", (long)gScope);
+}
+
+// 一键还原：所有 hook 回原样，停止改写
+- (void)restoreAll {
+    gEnabled = NO;
+    ResetHooks();
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    [d setBool:NO forKey:kDefOn];
+    [self refresh];
+    if (gLogOn) NSLog(@"[eCPM] 已还原全部 hook（广告 SDK 下次加载就是原样）");
+}
+
 - (void)rescan {
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
@@ -585,8 +639,10 @@ static EcpmPanel *gPanel = nil;
         @"新功能版本 7.3.9 · 2周前\n"
         @"· 28万表并集整理完成，旧表9条并入，共80条\n"
         @"· 命中/改写计数与最近命中项实时刷新\n\n"
+        @"v3.8.2 · 新增范围切换（全部/只ecpm/安全）与「还原全部」\n"
+        @"         · 没广告时切「只ecpm」不碰 price/bid\n"
         @"v3.8.1 · 移除 NSDictionary hook（点应用闪退修复）\n"
-        @"         · 长按球 = 安全模式（只挂旧表9条）\n"
+        @"         · 长按球 = 切范围\n"
         @"v3.8 · 支持 ABUAdPackage、BaiduMobAd\n"
         @"v3.7 · 增加叠加模式\n"
         @"v3.6 · 穿山甲 / 优量汇 / 快手通杀\n"
@@ -615,7 +671,8 @@ __attribute__((constructor)) static void EcpmInit(void) {
         gMode    = [d integerForKey:kDefMode];
         gEnabled = [d boolForKey:kDefOn];
         if ([d objectForKey:kDefLog]) gLogOn = [d boolForKey:kDefLog];
-        gSafeMode = [d boolForKey:@"EcpmCtrl38.safe"];
+        gScope = [d integerForKey:@"EcpmCtrl38.scope"];
+        if (gScope < 0 || gScope > 2) gScope = 1;   // 默认只 ecpm+cpm，保证广告能出
         if (gValue <= 0) gValue = 50000.0;
 
         [[EcpmPanel shared] showBubble];
