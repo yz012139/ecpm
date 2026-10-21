@@ -470,10 +470,10 @@ static EcpmPanel *gPanel = nil;
     headerBar.userInteractionEnabled = NO;
     [box addSubview:headerBar];
 
-    UILabel *title = [self label:@"eCPM 数值控制 v3.8.5" frame:CGRectMake(16, 6, W - 150, 24) size:16 color:UIColor.whiteColor bold:YES];
+    UILabel *title = [self label:@"eCPM 数值控制 v3.8.5" frame:CGRectMake(12, 6, 196, 24) size:15 color:UIColor.whiteColor bold:YES];
     [box addSubview:title];
 
-    UILabel *hint = [self label:@"≡ 按住拖动" frame:CGRectMake(W - 126, 6, 110, 24) size:11 color:[UIColor colorWithWhite:0.62 alpha:1] bold:NO];
+    UILabel *hint = [self label:@"≡ 按住拖动" frame:CGRectMake(W - 116, 6, 104, 24) size:10.5 color:[UIColor colorWithWhite:0.62 alpha:1] bold:NO];
     hint.textAlignment = NSTextAlignmentRight;
     [box addSubview:hint];
 
