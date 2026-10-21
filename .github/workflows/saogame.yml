@@ -1,0 +1,61 @@
+name: saogame-build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld make curl unzip xz-utils zip
+          clang --version | head -2
+
+      - name: 下载 iOS SDK
+        run: |
+          mkdir -p "$HOME/sdk"
+          curl -L -o /tmp/sdks.zip https://codeload.github.com/theos/sdks/zip/refs/heads/master
+          unzip -q /tmp/sdks.zip -d /tmp
+          cp -r /tmp/sdks-master/iPhoneOS14.5.sdk "$HOME/sdk/" 2>/dev/null || cp -r /tmp/sdks-master/*.sdk "$HOME/sdk/"
+          ls "$HOME/sdk"
+
+      - name: 编译可执行文件
+        run: |
+          SDK="$HOME/sdk/iPhoneOS14.5.sdk"
+          LLD="$(command -v ld64.lld || true)"
+          if [ -n "$LLD" ]; then FUSE="-fuse-ld=$LLD"; else FUSE="-fuse-ld=lld"; fi
+          clang -target arm64-apple-ios13.0 -isysroot "$SDK" -O2 \
+            -fobjc-arc -fblocks $FUSE \
+            -framework UIKit -framework Foundation -framework AVFoundation \
+            -framework Vision -framework CoreImage -framework CoreMedia \
+            -framework AudioToolbox -framework StoreKit -framework QuartzCore \
+            -Wl,-e,_main -o SaoGame \
+            SaoGame/main.m SaoGame/AppDelegate.m SaoGame/GameViewController.m \
+            SaoGame/ShopViewController.m SaoGame/GameStore.m \
+            SaoGame/QRScannerViewController.m SaoGame/QRCodeUtil.m 2>&1 | tee build.log
+          file SaoGame || true
+          ls -la SaoGame
+
+      - name: 打包 IPA
+        run: |
+          mkdir -p Payload/SaoGame.app
+          cp SaoGame Payload/SaoGame.app/SaoGame
+          cp SaoGame/Info.plist Payload/SaoGame.app/Info.plist
+          printf 'APPL????' > Payload/SaoGame.app/PkgInfo
+          chmod +x Payload/SaoGame.app/SaoGame
+          zip -qry SaoGame.ipa Payload
+          ls -la SaoGame.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SaoGame-ipa
+          path: |
+            SaoGame.ipa
+            SaoGame
+            build.log
+          if-no-files-found: warn
