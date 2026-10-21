@@ -30,6 +30,7 @@ static volatile long gWrites  = 0;        // 实际改写次数
 static char gLastCls[96] = "—";
 static char gLastSel[96] = "";
 static NSInteger gScope = 1;              // 0=全部80条 1=只ecpm+cpm 2=旧表9条(安全)
+static BOOL gPaused = NO;                 // 点了「还原全部」后暂停扫描
 
 static long gCandidateClasses = 0;        // 类名前缀命中的类数（面板 类X/31 的分母）
 static long gMatchedClasses   = 0;        // 真正挂上方法的类数（分子）
@@ -260,6 +261,7 @@ static BOOL HookClass(Class cls, NSString *name) {
 }
 
 static void ScanClasses(void) {
+    if (gPaused) return;
     if (gScanning) return;
     gScanning = YES;
 
@@ -554,6 +556,7 @@ static EcpmPanel *gPanel = nil;
 }
 
 - (void)apply {
+    gPaused = NO;
     gValue = self.field.text.doubleValue;
     gEnabled = YES;
     [self.field resignFirstResponder];
@@ -595,6 +598,7 @@ static EcpmPanel *gPanel = nil;
 
 // 切范围：先还原已挂 IMP，再按新范围重扫
 - (void)cycleScope {
+    gPaused = NO;
     gScope = (gScope + 1) % 3;
     [NSUserDefaults.standardUserDefaults setInteger:gScope forKey:@"EcpmCtrl38.scope"];
     [self.scopeBtn setTitle:[self scopeTitle] forState:UIControlStateNormal];
@@ -610,6 +614,7 @@ static EcpmPanel *gPanel = nil;
 
 // 一键还原：所有 hook 回原样，停止改写
 - (void)restoreAll {
+    gPaused = YES;
     gEnabled = NO;
     ResetHooks();
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
