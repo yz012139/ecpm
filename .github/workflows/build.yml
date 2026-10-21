@@ -43,7 +43,7 @@ jobs:
               -framework UIKit -framework Foundation -framework CoreGraphics \
               -Wl,-undefined,dynamic_lookup \
               -Wl,-install_name,@rpath/EcpmCtrl.dylib \
-              -o "EcpmCtrl-$ARCH.dylib" theos/Tweak.xm 2>&1 | tee "build-$ARCH.log"
+              -o "EcpmCtrl-$ARCH.dylib" -x objective-c theos/Tweak.xm 2>&1 | tee "build-$ARCH.log"
             echo "exit=$?"
           done
           ls -la *.dylib || true
