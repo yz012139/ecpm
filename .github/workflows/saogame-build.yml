@@ -49,6 +49,7 @@ jobs:
           cp SaoGame.bin Payload/SaoGame.app/SaoGame
           cp SaoGame/Info.plist Payload/SaoGame.app/Info.plist
           printf 'APPL????' > Payload/SaoGame.app/PkgInfo
+          cp SaoGame/icons/*.png Payload/SaoGame.app/
           chmod +x Payload/SaoGame.app/SaoGame
           zip -qry SaoGame.ipa Payload
           ls -la SaoGame.ipa
