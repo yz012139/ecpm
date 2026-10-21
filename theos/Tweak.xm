@@ -86,6 +86,10 @@ static void scanClasses(void) {
 // ---------------- 悬浮面板 ----------------
 @interface EcpmPanel : NSObject
 @property (nonatomic, strong) UIWindow *win;
+@property (nonatomic, strong) UIWindow *bubble;
+- (void)bubbleShow:(BOOL)showFlag;
+- (void)onBubblePan:(UIPanGestureRecognizer *)g;
+- (UIWindowScene *)anyScene;
 @end
 
 @implementation EcpmPanel
@@ -168,8 +172,10 @@ static void scanClasses(void) {
         [v addSubview:rescan];
 
         UIButton *hide = [self button:@"收起" frame:CGRectMake(12, 204, 276, 34) color:UIColor.darkGrayColor];
-        [hide addAction:[UIAction actionWithHandler:^(UIAction *a) { self.win.hidden = YES; }]
-              forControlEvents:UIControlEventTouchUpInside];
+        [hide addAction:[UIAction actionWithHandler:^(UIAction *a) {
+            self.win.hidden = YES;
+            [self bubbleShow:YES];
+        }] forControlEvents:UIControlEventTouchUpInside];
         [v addSubview:hide];
 
         UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(onPan:)];
@@ -179,6 +185,52 @@ static void scanClasses(void) {
         [self.win makeKeyAndVisible];
         ecpmLog(@"面板已显示");
     });
+}
+
+- (UIWindowScene *)anyScene {
+    for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
+        if ([s isKindOfClass:[UIWindowScene class]]) return (UIWindowScene *)s;
+    }
+    return nil;
+}
+
+- (void)bubbleShow:(BOOL)showFlag {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (showFlag && !self.bubble) {
+            UIWindowScene *sc = [self anyScene];
+            CGRect bf = CGRectMake(10, 200, 56, 56);
+            if (sc) self.bubble = [[UIWindow alloc] initWithWindowScene:sc];
+            else self.bubble = [[UIWindow alloc] initWithFrame:bf];
+            self.bubble.frame = bf;
+            self.bubble.windowLevel = UIWindowLevelAlert + 101;
+            self.bubble.backgroundColor = UIColor.clearColor;
+            UIViewController *bvc = [UIViewController new];
+            self.bubble.rootViewController = bvc;
+            UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+            b.frame = CGRectMake(0, 0, 56, 56);
+            [b setTitle:@"e" forState:UIControlStateNormal];
+            [b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+            b.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.85];
+            b.layer.cornerRadius = 28;
+            [b addAction:[UIAction actionWithHandler:^(UIAction *a) {
+                self.bubble.hidden = YES;
+                self.win.hidden = NO;
+                [self.win makeKeyAndVisible];
+            }] forControlEvents:UIControlEventTouchUpInside];
+            [bvc.view addSubview:b];
+            UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(onBubblePan:)];
+            [bvc.view addGestureRecognizer:pan];
+        }
+        self.bubble.hidden = !showFlag;
+    });
+}
+
+- (void)onBubblePan:(UIPanGestureRecognizer *)g {
+    CGPoint t = [g translationInView:self.bubble.superview];
+    CGRect f = self.bubble.frame;
+    f.origin.x += t.x; f.origin.y += t.y;
+    self.bubble.frame = f;
+    [g setTranslation:CGPointZero inView:self.bubble.superview];
 }
 
 - (void)onPan:(UIPanGestureRecognizer *)g {
