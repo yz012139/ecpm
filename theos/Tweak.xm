@@ -39,6 +39,8 @@ static NSString *const kDefValue = @"EcpmCtrl38.value";
 static NSString *const kDefMode  = @"EcpmCtrl38.mode";
 static NSString *const kDefOn    = @"EcpmCtrl38.enabled";
 static NSString *const kDefLog   = @"EcpmCtrl38.log";
+static NSString *const kDefCardX = @"EcpmCtrl38.cardX";
+static NSString *const kDefCardY = @"EcpmCtrl38.cardY";
 
 #pragma mark - 规则表（28万表）
 
@@ -438,7 +440,17 @@ static EcpmPanel *gPanel = nil;
 
     CGFloat W = 320, H = 452;
     UIWindow *w = [[UIWindow alloc] initWithWindowScene:sc];
-    w.frame = CGRectMake((UIScreen.mainScreen.bounds.size.width - W) / 2, 70, W, H);
+    CGRect screen = UIScreen.mainScreen.bounds;
+    NSUserDefaults *defs = NSUserDefaults.standardUserDefaults;
+    CGFloat ox = (screen.size.width - W) / 2;
+    CGFloat oy = 70;
+    if ([defs objectForKey:kDefCardX]) {
+        ox = [defs doubleForKey:kDefCardX];
+        oy = [defs doubleForKey:kDefCardY];
+    }
+    ox = MAX(0, MIN(screen.size.width - W, ox));
+    oy = MAX(0, MIN(screen.size.height - H, oy));
+    w.frame = CGRectMake(ox, oy, W, H);
     w.windowLevel = UIWindowLevelAlert + 3;
     w.backgroundColor = UIColor.clearColor;
 
@@ -452,8 +464,18 @@ static EcpmPanel *gPanel = nil;
     box.layer.masksToBounds = YES;
     [vc.view addSubview:box];
 
-    UILabel *title = [self label:@"eCPM 数值控制 v3.8" frame:CGRectMake(16, 12, W - 32, 22) size:16 color:UIColor.whiteColor bold:YES];
+    // 顶部标题条：只是视觉上的“抓手”，真正的手势挂在 box 上，按住面板任意空白处都能拖
+    UIView *headerBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, W, 34)];
+    headerBar.backgroundColor = [UIColor colorWithWhite:0.13 alpha:0.95];
+    headerBar.userInteractionEnabled = NO;
+    [box addSubview:headerBar];
+
+    UILabel *title = [self label:@"eCPM 数值控制 v3.8.5" frame:CGRectMake(16, 6, W - 150, 24) size:16 color:UIColor.whiteColor bold:YES];
     [box addSubview:title];
+
+    UILabel *hint = [self label:@"≡ 按住拖动" frame:CGRectMake(W - 126, 6, 110, 24) size:11 color:[UIColor colorWithWhite:0.62 alpha:1] bold:NO];
+    hint.textAlignment = NSTextAlignmentRight;
+    [box addSubview:hint];
 
     [box addSubview:[self label:@"叠加=原值+输入，替换=强制等于输入；范围只认28万表里的类名+方法名"
                         frame:CGRectMake(16, 36, W - 32, 30) size:10.5 color:UIColor.grayColor bold:NO]];
@@ -526,9 +548,11 @@ static EcpmPanel *gPanel = nil;
     [hist addTarget:self action:@selector(history) forControlEvents:UIControlEventTouchUpInside];
     [box addSubview:hist];
 
+    // 整个面板（box）都能按着拖：按钮/输入框照样点，拖动超过阈值才移动
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panCard:)];
-    [title addGestureRecognizer:pan];
-    title.userInteractionEnabled = YES;
+    pan.cancelsTouchesInView = YES;
+    pan.delaysTouchesBegan = NO;
+    [box addGestureRecognizer:pan];
 
     self.card = w;
     [self refresh];
@@ -563,12 +587,25 @@ static EcpmPanel *gPanel = nil;
 }
 
 - (void)panCard:(UIPanGestureRecognizer *)g {
-    CGPoint t = [g translationInView:self.card];
+    // 统一用屏幕坐标算位移：窗口自身 frame 变化不会污染 translation
+    CGPoint t = [g translationInView:nil];
     CGRect f = self.card.frame;
+    CGRect screen = UIScreen.mainScreen.bounds;
     f.origin.x += t.x;
     f.origin.y += t.y;
+    // 限制在屏幕内，拖不出边界
+    f.origin.x = MAX(0, MIN(screen.size.width - f.size.width, f.origin.x));
+    f.origin.y = MAX(0, MIN(screen.size.height - f.size.height, f.origin.y));
     self.card.frame = f;
-    [g setTranslation:CGPointZero inView:self.card];
+    [g setTranslation:CGPointZero inView:nil];
+
+    // 松手记住位置，下次打开还在原地
+    if (g.state == UIGestureRecognizerStateEnded ||
+        g.state == UIGestureRecognizerStateCancelled) {
+        NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+        [d setDouble:f.origin.x forKey:kDefCardX];
+        [d setDouble:f.origin.y forKey:kDefCardY];
+    }
 }
 
 - (void)apply {
@@ -658,6 +695,8 @@ static EcpmPanel *gPanel = nil;
 
 - (void)history {
     NSString *msg =
+        @"v3.8.5 · 面板改成「按住任意空白处就能拖」，松手记住位置\n"
+        @"         · 顶部加拖动提示条，拖出屏幕会自动吸回边界\n\n"
         @"新功能版本 7.3.9 · 2周前\n"
         @"· 28万表并集整理完成，旧表9条并入，共80条\n"
         @"· 命中/改写计数与最近命中项实时刷新\n\n"
