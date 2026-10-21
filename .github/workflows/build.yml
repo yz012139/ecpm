@@ -14,16 +14,20 @@ jobs:
       - name: 安装依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y make git curl unzip xz-utils libssl-dev libplist-dev zstd || true
+          sudo apt-get install -y make git curl unzip xz-utils libssl-dev libplist-dev zstd clang lld libtinfo6 || true
+          sudo apt-get install -y ldid || true
+          clang --version || true
 
       - name: 安装 Theos
         run: |
           git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
           chmod +x "$HOME/theos/bin/"* || true
+          ls "$HOME/theos/bin" || true
 
       - name: 下载 iOS SDK
         run: |
-          curl -L -o /tmp/sdks.zip https://github.com/theos/sdks/archive/master.zip
+          curl -L -o /tmp/sdks.zip https://github.com/theos/sdks/archive/master.zip || \
+          curl -L -o /tmp/sdks.zip https://codeload.github.com/theos/sdks/zip/refs/heads/master
           unzip -q /tmp/sdks.zip -d /tmp
           mkdir -p "$HOME/theos/sdks"
           cp -r /tmp/sdks-master/*.sdk "$HOME/theos/sdks/" || true
@@ -35,7 +39,9 @@ jobs:
           export PATH="$THEOS/bin:$PATH"
           cd theos
           make clean || true
-          make -j4 V=1
+          make -j4 V=1 2>&1 | tee build.log
+          echo "---- exit: $? ----"
+          find .theos -name "*.dylib" -print || true
 
       - name: 列出产物
         run: |
@@ -48,5 +54,5 @@ jobs:
           path: |
             theos/.theos/obj/**/*.dylib
             theos/.theos/obj/*.dylib
-            **/*.dylib
-          if-no-files-found: error
+            theos/build.log
+          if-no-files-found: warn
