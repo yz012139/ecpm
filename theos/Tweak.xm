@@ -1,15 +1,16 @@
-﻿// =====================================================================
-// eCPM 鏁板€兼帶鍒?v3.8  鈥斺€?TrollFools / 杞绘澗绛?娉ㄥ叆鐢ㄧ殑绾?dylib
-// 涓嶄緷璧?CydiaSubstrate锛屼笉闇€瑕佽秺鐙憋紝闈?__attribute__((constructor)) 鍚姩
-// 缂栬瘧浜х墿锛?theos/obj/EcpmCtrl.dylib锛坅rm64 + arm64e锛?// =====================================================================
+// =====================================================================
+// eCPM 数值控制 v3.8  —— TrollFools / 轻松签 注入用的纯 dylib
+// 不依赖 CydiaSubstrate，不需要越狱，靠 __attribute__((constructor)) 启动
+// 编译产物：.theos/obj/EcpmCtrl.dylib（arm64 + arm64e）
+// =====================================================================
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <string.h>
 #import <Foundation/Foundation.h>
 
-static double gValue = 50000.0;     // 鐩爣 eCPM
-static int    gMode  = 0;           // 0=鏇挎崲  1=鍙犲姞
+static double gValue = 50000.0;     // 目标 eCPM
+static int    gMode  = 0;           // 0=替换  1=叠加
 static BOOL   gLog   = YES;
 static long   gHits  = 0;
 static long   gHooked = 0;
@@ -73,17 +74,17 @@ static void scanClasses(void) {
                 else if (rt == 'f') { method_setImplementation(methods[j], (IMP)hookF); n++; }
                 else if (rt == 'q') { method_setImplementation(methods[j], (IMP)hookQ); n++; }
                 else if (rt == 'i') { method_setImplementation(methods[j], (IMP)hookI); n++; }
-                /* 杩斿洖瀵硅薄锛?@'锛夌殑鏂规硶涓€寰嬩笉纰帮細绫诲瀷瀵逛笉涓婁細鐩存帴鎶?App 寮勫穿 */
+                /* 返回对象（'@'）的方法一律不碰：类型对不上会直接把 App 弄崩 */
             }
             free(methods);
             if (n) { clsCount++; gHooked += n; }
         }
         free(classes);
     }
-    ecpmLog([NSString stringWithFormat:@"鎵弿瀹屾垚锛氱被 %d 路 宸叉寕 %ld 鏉?, clsCount, gHooked]);
+    ecpmLog([NSString stringWithFormat:@"扫描完成：类 %d · 已挂 %ld 条", clsCount, gHooked]);
 }
 
-// ---------------- 瀛楀吀鎷︽埅锛氭妸 JSON 閲岀殑 ecpm / cpm 閿鍑烘潵鏀规垚 50000 ----------------
+// ---------------- 字典拦截：把 JSON 里的 ecpm / cpm 键读出来改成 50000 ----------------
 static Class gDictCls[16];
 static IMP   gDictOrig[16];
 static int   gDictCount = 0;
@@ -95,15 +96,9 @@ static BOOL keyWanted(NSString *k) {
     if (len < 3 || len > 40) return NO;
     const char *s = k.UTF8String;
     if (!s) return NO;
-    // 涓嶅尯鍒嗗ぇ灏忓啓鎵?ecpm / cpm
     for (const char *p = s; *p; p++) {
-        char c = *p;
-        if (c == 'e' || c == 'E') {
-            if (!strncasecmp(p, "ecpm", 4)) return YES;
-        }
-        if (c == 'c' || c == 'C') {
-            if (!strncasecmp(p, "cpm", 3)) return YES;
-        }
+        if (!strncasecmp(p, "ecpm", 4)) return YES;
+        if (!strncasecmp(p, "cpm", 3)) return YES;
     }
     return NO;
 }
@@ -118,7 +113,8 @@ static id hookObjectForKey(id self, SEL _cmd, id key) {
     id v = ((id (*)(id, SEL, id))orig)(self, _cmd, key);
     if (keyWanted((NSString *)key)) {
         gDictHits++;
-        return @( applyValue([v isKindOfClass:[NSNumber class]] ? [v doubleValue] : 0) );
+        double base = [v isKindOfClass:[NSNumber class]] ? [v doubleValue] : 0;
+        return @( applyValue(base) );
     }
     return v;
 }
@@ -141,10 +137,10 @@ static void hookDictionaries(void) {
         }
         method_setImplementation(m, (IMP)hookObjectForKey);
     }
-    ecpmLog([NSString stringWithFormat:@"瀛楀吀鎷︽埅宸叉寕 %d 涓被", gDictCount]);
+    ecpmLog([NSString stringWithFormat:@"字典拦截已挂 %d 个类", gDictCount]);
 }
 
-// ---------------- 鎮诞闈㈡澘 ----------------
+// ---------------- 悬浮面板 ----------------
 @interface EcpmPanel : NSObject
 @property (nonatomic, strong) UIWindow *win;
 @property (nonatomic, strong) UIWindow *bubble;
@@ -197,8 +193,8 @@ static void hookDictionaries(void) {
         UIView *v = vc.view;
         v.frame = CGRectMake(0, 0, 300, 290);
 
-        [v addSubview:[self label:@"eCPM 鏁板€兼帶鍒?v3.8" frame:CGRectMake(12, 10, 260, 22) size:16 color:UIColor.whiteColor]];
-        [v addSubview:[self label:@"鍙犲姞=鍘熷€?杈撳叆锛屾浛鎹?寮哄埗绛変簬杈撳叆" frame:CGRectMake(12, 34, 276, 34) size:11 color:UIColor.grayColor]];
+        [v addSubview:[self label:@"eCPM 数值控制 v3.8" frame:CGRectMake(12, 10, 260, 22) size:16 color:UIColor.whiteColor]];
+        [v addSubview:[self label:@"叠加=原值+输入，替换=强制等于输入" frame:CGRectMake(12, 34, 276, 34) size:11 color:UIColor.grayColor]];
 
         UITextField *field = [[UITextField alloc] initWithFrame:CGRectMake(12, 72, 276, 34)];
         field.text = [NSString stringWithFormat:@"%.0f", gValue];
@@ -207,32 +203,32 @@ static void hookDictionaries(void) {
         field.keyboardType = UIKeyboardTypeNumberPad;
         [v addSubview:field];
 
-        UILabel *status = [self label:@"绛夊緟鎵弿鈥? frame:CGRectMake(12, 116, 276, 40) size:11 color:UIColor.greenColor];
+        UILabel *status = [self label:@"等待扫描…" frame:CGRectMake(12, 116, 276, 40) size:11 color:UIColor.greenColor];
         [v addSubview:status];
         if (!gObserverLabels) gObserverLabels = [NSMutableArray array];
         [gObserverLabels addObject:status];
 
-        UIButton *apply = [self button:@"搴旂敤" frame:CGRectMake(12, 160, 84, 34) color:UIColor.systemBlueColor];
+        UIButton *apply = [self button:@"应用" frame:CGRectMake(12, 160, 84, 34) color:UIColor.systemBlueColor];
         [apply addAction:[UIAction actionWithHandler:^(UIAction *a) {
             gValue = field.text.doubleValue;
-            ecpmLog([NSString stringWithFormat:@"宸插簲鐢?%.0f", gValue]);
+            ecpmLog([NSString stringWithFormat:@"已应用 %.0f", gValue]);
         }] forControlEvents:UIControlEventTouchUpInside];
         [v addSubview:apply];
 
-        UIButton *mode = [self button:@"妯″紡:鏇挎崲" frame:CGRectMake(104, 160, 84, 34) color:UIColor.orangeColor];
+        UIButton *mode = [self button:@"模式:替换" frame:CGRectMake(104, 160, 84, 34) color:UIColor.orangeColor];
         [mode addAction:[UIAction actionWithHandler:^(UIAction *a) {
             gMode = (gMode == 0) ? 1 : 0;
-            [(UIButton *)a.sender setTitle:(gMode ? @"妯″紡:鍙犲姞" : @"妯″紡:鏇挎崲") forState:UIControlStateNormal];
+            [(UIButton *)a.sender setTitle:(gMode ? @"模式:叠加" : @"模式:替换") forState:UIControlStateNormal];
         }] forControlEvents:UIControlEventTouchUpInside];
         [v addSubview:mode];
 
-        UIButton *rescan = [self button:@"閲嶆柊鎵弿" frame:CGRectMake(196, 160, 92, 34) color:UIColor.systemGreenColor];
+        UIButton *rescan = [self button:@"重新扫描" frame:CGRectMake(196, 160, 92, 34) color:UIColor.systemGreenColor];
         [rescan addAction:[UIAction actionWithHandler:^(UIAction *a) {
             dispatch_async(dispatch_get_global_queue(0, 0), ^{ scanClasses(); });
         }] forControlEvents:UIControlEventTouchUpInside];
         [v addSubview:rescan];
 
-        UIButton *hide = [self button:@"鏀惰捣" frame:CGRectMake(12, 204, 276, 34) color:UIColor.darkGrayColor];
+        UIButton *hide = [self button:@"收起" frame:CGRectMake(12, 204, 276, 34) color:UIColor.darkGrayColor];
         [hide addAction:[UIAction actionWithHandler:^(UIAction *a) {
             self.win.hidden = YES;
             [self bubbleShow:YES];
@@ -244,7 +240,7 @@ static void hookDictionaries(void) {
 
         self.win.hidden = NO;
         [self.win makeKeyAndVisible];
-        ecpmLog(@"闈㈡澘宸叉樉绀?);
+        ecpmLog(@"面板已显示");
     });
 }
 
@@ -303,7 +299,7 @@ static void hookDictionaries(void) {
 }
 @end
 
-// ---------------- 鏋勯€犲嚱鏁帮紙dylib 鍔犺浇鍗虫墽琛岋級 ----------------
+// ---------------- 构造函数（dylib 加载即执行） ----------------
 __attribute__((constructor))
 static void ecpm_init(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
@@ -314,4 +310,3 @@ static void ecpm_init(void) {
         [NSTimer scheduledTimerWithTimeInterval:15 repeats:YES block:^(NSTimer *t) { scanClasses(); }];
     });
 }
-
