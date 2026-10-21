@@ -1,0 +1,9 @@
+Package: com.fj.xsao
+Name: 扫码 XSao
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: 视频同款扫码原理的 iOS 实现：AVFoundation 取帧 + Vision 解码，悬浮按钮呼出扫码页，支持相册识别与二维码生成。
+Maintainer: 富江
+Author: 富江
+Section: Tweaks
+Depends: mobilesubstrate
