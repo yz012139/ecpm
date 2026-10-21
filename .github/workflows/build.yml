@@ -1,0 +1,52 @@
+name: build-dylib
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取仓库
+        uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make git curl unzip xz-utils libssl-dev libplist-dev zstd || true
+
+      - name: 安装 Theos
+        run: |
+          git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
+          chmod +x "$HOME/theos/bin/"* || true
+
+      - name: 下载 iOS SDK
+        run: |
+          curl -L -o /tmp/sdks.zip https://github.com/theos/sdks/archive/master.zip
+          unzip -q /tmp/sdks.zip -d /tmp
+          mkdir -p "$HOME/theos/sdks"
+          cp -r /tmp/sdks-master/*.sdk "$HOME/theos/sdks/" || true
+          ls "$HOME/theos/sdks" | head
+
+      - name: 编译 dylib
+        run: |
+          export THEOS="$HOME/theos"
+          export PATH="$THEOS/bin:$PATH"
+          cd theos
+          make clean || true
+          make -j4 V=1
+
+      - name: 列出产物
+        run: |
+          find theos/.theos -name "*.dylib" -print || true
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: EcpmCtrl-dylib
+          path: |
+            theos/.theos/obj/**/*.dylib
+            theos/.theos/obj/*.dylib
+            **/*.dylib
+          if-no-files-found: error

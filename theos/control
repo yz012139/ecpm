@@ -1,0 +1,9 @@
+Package: com.fj.ecpmctrl
+Name: eCPM 数值控制
+Version: 3.8
+Architecture: iphoneos-arm64
+Description: 悬浮面板，改写穿山甲/ABU 广告 SDK 上报的 eCPM 数值（替换/叠加两种模式）
+Maintainer: FJ
+Author: FJ
+Section: Tweaks
+Depends: mobilesubstrate (>= 0.9.5000), firmware (>= 14.0)
