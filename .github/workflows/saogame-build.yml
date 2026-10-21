@@ -36,17 +36,17 @@ jobs:
             -framework Vision -framework CoreImage -framework CoreMedia \
             -framework AudioToolbox -framework StoreKit -framework QuartzCore \
             -framework CoreGraphics -framework CoreVideo \
-            -Wl,-e,_main -o SaoGame \
+            -Wl,-e,_main -o SaoGame.bin \
             SaoGame/main.m SaoGame/AppDelegate.m SaoGame/GameViewController.m \
             SaoGame/ShopViewController.m SaoGame/GameStore.m \
             SaoGame/QRScannerViewController.m SaoGame/QRCodeUtil.m 2>&1 | tee build.log
-          file SaoGame || true
-          ls -la SaoGame
+          file SaoGame.bin || true
+          ls -la SaoGame.bin
 
       - name: 打包 IPA
         run: |
           mkdir -p Payload/SaoGame.app
-          cp SaoGame Payload/SaoGame.app/SaoGame
+          cp SaoGame.bin Payload/SaoGame.app/SaoGame
           cp SaoGame/Info.plist Payload/SaoGame.app/Info.plist
           printf 'APPL????' > Payload/SaoGame.app/PkgInfo
           chmod +x Payload/SaoGame.app/SaoGame
@@ -58,6 +58,6 @@ jobs:
           name: SaoGame-ipa
           path: |
             SaoGame.ipa
-            SaoGame
+            SaoGame.bin
             build.log
           if-no-files-found: warn
