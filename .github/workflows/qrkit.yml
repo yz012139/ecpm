@@ -34,7 +34,7 @@ jobs:
             -framework UIKit -framework Foundation -framework AVFoundation \
             -framework Vision -framework CoreImage -framework CoreMedia -framework AudioToolbox \
             -Wl,-undefined,dynamic_lookup -Wl,-install_name,@executable_path/Frameworks/XSao.dylib \
-            -o XSao.dylib \
+            -o XSao.dylib -x objective-c \
             qrkit/XSao.xm qrkit/QRScannerViewController.m qrkit/QRCodeUtil.m 2>&1 | tee build.log
           ls -la XSao.dylib
 

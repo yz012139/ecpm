@@ -6,6 +6,7 @@
 #import "QRCodeUtil.h"
 #import <CoreImage/CoreImage.h>
 #import <Vision/Vision.h>
+#import <ImageIO/ImageIO.h>
 
 @implementation QRCodeUtil
 

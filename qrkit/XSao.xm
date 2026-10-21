@@ -36,24 +36,25 @@ static void SaoPresentScanner(void) {
     UIViewController *top = SaoTopViewController();
     if (!top || [top isKindOfClass:[QRScannerViewController class]]) return;
 
-    QRScannerViewController *scanner =
-        [QRScannerViewController scannerWithCompletion:^(NSString *text, NSString *format) {
-            UIPasteboard.generalPasteboard.string = text;
+    QRScannerViewController *scanner = [QRScannerViewController scannerWithCompletion:nil];
+    __weak QRScannerViewController *weakScanner = scanner;
+    scanner.completion = ^(NSString *text, NSString *format) {
+        UIPasteboard.generalPasteboard.string = text;
 
-            UIAlertController *alert =
-                [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"扫码结果（%@）", format]
-                                                    message:text
-                                             preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"复制并关闭"
-                                                      style:UIAlertActionStyleDefault
-                                                    handler:^(UIAlertAction *a) {
-                [scanner dismissViewControllerAnimated:YES completion:nil];
-            }]];
-            [alert addAction:[UIAlertAction actionWithTitle:@"继续扫"
-                                                      style:UIAlertActionStyleCancel
-                                                    handler:nil]];
-            [scanner presentViewController:alert animated:YES completion:nil];
-        }];
+        UIAlertController *alert =
+            [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"扫码结果（%@）", format]
+                                                message:text
+                                         preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"复制并关闭"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *a) {
+            [weakScanner dismissViewControllerAnimated:YES completion:nil];
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"继续扫"
+                                                  style:UIAlertActionStyleCancel
+                                                handler:nil]];
+        [weakScanner presentViewController:alert animated:YES completion:nil];
+    };
     scanner.modalPresentationStyle = UIModalPresentationFullScreen;
     [top presentViewController:scanner animated:YES completion:nil];
 }

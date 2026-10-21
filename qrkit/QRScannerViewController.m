@@ -13,6 +13,7 @@
 #import <Vision/Vision.h>
 #import <ImageIO/ImageIO.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <QuartzCore/QuartzCore.h>
 
 static const CGFloat kScanBoxSide = 260.0;
 
