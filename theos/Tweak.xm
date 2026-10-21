@@ -31,18 +31,6 @@ static long long hookQ(id self, SEL _cmd) { gHits++; return (long long)applyValu
 static int    hookI(id self, SEL _cmd) { gHits++; return (int)applyValue(0); }
 static id     hookN(id self, SEL _cmd) { gHits++; return @( applyValue(0) ); }
 
-// ---- setter 专用：把传进来的值直接改掉 ----
-static void hookSetD(id self, SEL _cmd, double v) { gHits++; }
-static void hookSetF(id self, SEL _cmd, float v)  { gHits++; }
-static void hookSetId(id self, SEL _cmd, id v) {
-    gHits++;
-    // 什么都不做：把外部赋值吞掉，让对象自己保留默认/上次值
-}
-static void hookSetNum(id self, SEL _cmd, id v) {
-    gHits++;
-    // 吞掉赋值
-}
-
 static BOOL isCandidateName(NSString *n) {
     static NSArray *prefixes;
     static dispatch_once_t once;
@@ -55,7 +43,7 @@ static BOOL isCandidateName(NSString *n) {
 
 static BOOL isCandidateSel(NSString *s) {
     NSString *low = s.lowercaseString;
-    if ([low containsString:@"init"] || [low containsString:@"dealloc"]) return NO;
+    if ([low hasPrefix:@"set"] || [low containsString:@"init"] || [low containsString:@"dealloc"]) return NO;
     return ([low containsString:@"ecpm"] || [low containsString:@"cpm"] ||
             [low containsString:@"price"] || [low containsString:@"bid"] ||
             [low containsString:@"revenue"]);
@@ -82,19 +70,11 @@ static void scanClasses(void) {
                 const char *types = method_getTypeEncoding(methods[j]);
                 if (!types || !types[0]) continue;
                 char rt = types[0];
-                BOOL isSetter = [selStr hasPrefix:@"set"] && selStr.length > 4;
-                if (isSetter) {
-                    char at = 0;
-                    char *atp = method_copyArgumentType(methods[j], 2);
-                    if (atp) { at = atp[0]; free(atp); }
-                    if (at == 'd') { method_setImplementation(methods[j], (IMP)hookSetD); n++; }
-                    else if (at == 'f') { method_setImplementation(methods[j], (IMP)hookSetF); n++; }
-                    else if (at == '@') { method_setImplementation(methods[j], (IMP)hookSetId); n++; }
-                }
-                else if (rt == 'd') { method_setImplementation(methods[j], (IMP)hookD); n++; }
+                if (rt == 'd') { method_setImplementation(methods[j], (IMP)hookD); n++; }
                 else if (rt == 'f') { method_setImplementation(methods[j], (IMP)hookF); n++; }
                 else if (rt == 'q') { method_setImplementation(methods[j], (IMP)hookQ); n++; }
                 else if (rt == 'i') { method_setImplementation(methods[j], (IMP)hookI); n++; }
+                /* 返回对象（'@'）的方法一律不碰：类型对不上会直接把 App 弄崩 */
             }
             free(methods);
             if (n) { clsCount++; gHooked += n; }
@@ -102,54 +82,6 @@ static void scanClasses(void) {
         free(classes);
     }
     ecpmLog([NSString stringWithFormat:@"扫描完成：类 %d · 已挂 %ld 条", clsCount, gHooked]);
-}
-
-// ---------------- 字典拦截：把 JSON 里的 ecpm / cpm 键读出来改成 50000 ----------------
-static IMP  gOrigObjForKey = NULL;
-static long gDictHits = 0;
-
-static BOOL keyWanted(NSString *k) {
-    if (![k isKindOfClass:[NSString class]]) return NO;
-    NSUInteger len = k.length;
-    if (len < 3 || len > 40) return NO;
-    const char *s = k.UTF8String;
-    if (!s) return NO;
-    for (const char *p = s; *p; p++) {
-        if (!strncasecmp(p, "ecpm", 4)) return YES;
-        if (!strncasecmp(p, "cpm", 3)) return YES;
-    }
-    return NO;
-}
-
-static id hookObjectForKey(id self, SEL _cmd, id key) {
-    if (!gOrigObjForKey) return nil;
-    id v = ((id (*)(id, SEL, id))gOrigObjForKey)(self, _cmd, key);
-    if (!v) return v;
-    if (![v isKindOfClass:[NSNumber class]]) return v;   // 只改数值，字符串原样放过
-    if (keyWanted((NSString *)key)) {
-        gDictHits++;
-        return @( applyValue([v doubleValue]) );
-    }
-    return v;
-}
-
-static void hookDictionaries(void) {
-    NSArray *names = @[@"__NSDictionaryI", @"__NSDictionaryM", @"__NSDictionary0",
-                       @"NSDictionary", @"NSMutableDictionary"];
-    SEL sel = @selector(objectForKey:);
-    int cnt = 0;
-    for (NSString *n in names) {
-        Class c = NSClassFromString(n);
-        if (!c) continue;
-        Method m = class_getInstanceMethod(c, sel);
-        if (!m) continue;
-        IMP cur = method_getImplementation(m);
-        if ((void *)cur == (void *)hookObjectForKey) continue;
-        if (!gOrigObjForKey) gOrigObjForKey = cur;
-        method_setImplementation(m, (IMP)hookObjectForKey);
-        cnt++;
-    }
-    ecpmLog([NSString stringWithFormat:@"字典拦截已挂 %d 个类", cnt]);
 }
 
 // ---------------- 悬浮面板 ----------------
@@ -317,7 +249,6 @@ static void ecpm_init(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                    dispatch_get_global_queue(0, 0), ^{
         scanClasses();
-        hookDictionaries();
         [[EcpmPanel shared] show];
         [NSTimer scheduledTimerWithTimeInterval:15 repeats:YES block:^(NSTimer *t) { scanClasses(); }];
     });
