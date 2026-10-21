@@ -183,7 +183,13 @@ static BOOL ScopeAllows(NSString *clsName, const EcpmRule *r) {
         NSString *low = clsName.lowercaseString;
         if ([low containsString:@"request"] || [low containsString:@"param"] ||
             [low containsString:@"config"] || [low containsString:@"setting"] ||
-            [low containsString:@"bidding"] || [low containsString:@"slot"]) return NO;
+            [low containsString:@"bidding"] || [low containsString:@"slot"] ||
+            [low containsString:@"reward"]  || [low containsString:@"verify"] ||
+            [low containsString:@"claim"]   || [low containsString:@"callback"] ||
+            [low containsString:@"track"]   || [low containsString:@"report"] ||
+            [low containsString:@"stat"]    || [low containsString:@"cache"] ||
+            [low containsString:@"mediation"] || [low containsString:@"adapter"] ||
+            [low containsString:@"loader"] || [low containsString:@"service"]) return NO;
         return YES;
     }
     return YES;                                     // 全部 80 条
@@ -243,6 +249,7 @@ static BOOL HookClass(Class cls, NSString *name) {
     if (!cls) return NO;
     BOOL any = NO;
     for (int pass = 0; pass < 2; pass++) {
+        if (pass == 1 && gScope == 1) break;        // 只ecpm模式：只挂实例方法，不碰类方法
         Class target = (pass == 0) ? cls : object_getClass(cls);
         unsigned int mc = 0;
         Method *ms = class_copyMethodList(target, &mc);
@@ -252,6 +259,9 @@ static BOOL HookClass(Class cls, NSString *name) {
             const EcpmRule *rule = RuleFor(name, selName);
             if (!rule) continue;
             if (!ScopeAllows(name, rule)) continue;   // 按当前范围过滤
+            // 领奖/校验/回调链路一个都不碰：挂上去会把领奖流程改坏
+            if (strstr(selName, "reward") || strstr(selName, "verify") ||
+                strstr(selName, "claim") || strstr(selName, "callback")) continue;
             int idx = (int)(rule - kRules);
             if (HookOne(target, ms[i], rule, idx)) any = YES;
         }
@@ -644,6 +654,8 @@ static EcpmPanel *gPanel = nil;
         @"新功能版本 7.3.9 · 2周前\n"
         @"· 28万表并集整理完成，旧表9条并入，共80条\n"
         @"· 命中/改写计数与最近命中项实时刷新\n\n"
+        @"v3.8.3 · 只ecpm模式再排除领奖/校验/上报类，不挂类方法\n"
+        @"         · 补扫间隔 12 秒，减少反复扫描\n"
         @"v3.8.2 · 新增范围切换（全部/只ecpm/安全）与「还原全部」\n"
         @"         · 没广告时切「只ecpm」不碰 price/bid\n"
         @"v3.8.1 · 移除 NSDictionary hook（点应用闪退修复）\n"
@@ -687,8 +699,8 @@ __attribute__((constructor)) static void EcpmInit(void) {
             dispatch_async(dispatch_get_main_queue(), ^{ [[EcpmPanel shared] refresh]; });
         });
 
-        // 广告 SDK 懒加载：定时补扫（已挂满 80 条后自动跳过）
-        [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer *t) {
+        // 广告 SDK 懒加载：定时补扫；挂载已稳定就把间隔拉长，避免反复扫描拖 CPU
+        [NSTimer scheduledTimerWithTimeInterval:12.0 repeats:YES block:^(NSTimer *t) {
             if (gSlotCount >= RULE_COUNT) return;
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ ScanClasses(); });
         }];
