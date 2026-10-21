@@ -15,6 +15,7 @@
 #import <objc/runtime.h>
 #import <string.h>
 #import <stdlib.h>
+#import <stdio.h>
 
 #pragma mark - 全局状态
 
@@ -26,7 +27,9 @@ static BOOL     gScanning     = NO;
 
 static volatile long gHits    = 0;        // getter 被调用次数
 static volatile long gWrites  = 0;        // 实际改写次数
-static NSString     *gLastHit = @"—";
+static char gLastCls[96] = "—";
+static char gLastSel[96] = "";
+static BOOL gSafeMode = NO;               // 安全模式：只挂旧表 9 条
 
 static long gCandidateClasses = 0;        // 类名前缀命中的类数（面板 类X/31 的分母）
 static long gMatchedClasses   = 0;        // 真正挂上方法的类数（分子）
@@ -90,6 +93,7 @@ typedef struct {
     Class       cls;       // 被挂的类（类方法时为 metaclass）
     const char *sel;       // 方法名，静态字符串（getter 名不会变，直接存 sel_getName）
     IMP         orig;
+    Method      method;    // 原始 Method，安全模式下要还原
     int         rule;      // 命中的规则下标
 } EcpmSlot;
 
@@ -122,10 +126,12 @@ static IMP OrigIMP(id self, SEL cmd) {
 }
 
 static void NoteHit(id self, SEL cmd) {
-    gHits++;
+    __atomic_fetch_add(&gHits, 1L, __ATOMIC_RELAXED);
     Class c = object_getClass(self);
     if (class_isMetaClass(c)) c = object_getClass(c);
-    gLastHit = [NSString stringWithFormat:@"%s.%s", class_getName(c), sel_getName(cmd)];
+    // 不在 getter 里做 NSString 分配：高频调用 + 无 autorelease pool 的线程会堆内存
+    snprintf(gLastCls, sizeof(gLastCls), "%s", class_getName(c));
+    snprintf(gLastSel, sizeof(gLastSel), "%s", sel_getName(cmd));
 }
 
 #define HOOK_BODY(TYPE, ZERO)                                              \
@@ -134,7 +140,7 @@ static void NoteHit(id self, SEL cmd) {
     if (o) base = ((TYPE (*)(id, SEL))o)(self, cmd);                       \
     NoteHit(self, cmd);                                                    \
     if (!gEnabled) return base;                                            \
-    gWrites++;                                                             \
+    __atomic_fetch_add(&gWrites, 1L, __ATOMIC_RELAXED);                    \
     return (TYPE)ModeValue((double)base);
 
 static float hF(id self, SEL cmd)            { HOOK_BODY(float, 0.0f) }
@@ -193,13 +199,27 @@ static BOOL HookOne(Class cls, Method m, const EcpmRule *rule, int ruleIndex) {
     IMP orig = method_setImplementation(m, newImp);
     if (!orig || orig == newImp) return NO;               // 已经是我们自己，别叠
 
-    gSlots[gSlotCount].cls  = cls;
-    gSlots[gSlotCount].sel  = selName;
-    gSlots[gSlotCount].orig = orig;
-    gSlots[gSlotCount].rule = ruleIndex;
+    gSlots[gSlotCount].cls    = cls;
+    gSlots[gSlotCount].sel    = selName;
+    gSlots[gSlotCount].orig   = orig;
+    gSlots[gSlotCount].method = m;
+    gSlots[gSlotCount].rule   = ruleIndex;
     gSlotCount++;
     if (rule->legacy) gLegacyHooked++;
     return YES;
+}
+
+// 还原所有 hook（切安全模式 / 重启前用）
+static void ResetHooks(void) {
+    for (int i = 0; i < gSlotCount; i++) {
+        if (gSlots[i].method && gSlots[i].orig) {
+            method_setImplementation(gSlots[i].method, gSlots[i].orig);
+        }
+    }
+    gSlotCount = 0;
+    gLegacyHooked = 0;
+    gMatchedClasses = 0;
+    gCandidateClasses = 0;
 }
 
 // 扫一个类（含 metaclass）
@@ -215,6 +235,7 @@ static BOOL HookClass(Class cls, NSString *name) {
             const char *selName = sel_getName(method_getName(ms[i]));
             const EcpmRule *rule = RuleFor(name, selName);
             if (!rule) continue;
+            if (gSafeMode && !rule->legacy) continue;   // 安全模式：只挂旧表 9 条
             int idx = (int)(rule - kRules);
             if (HookOne(target, ms[i], rule, idx)) any = YES;
         }
@@ -232,15 +253,17 @@ static void ScanClasses(void) {
     long cand = 0, matched = 0;
 
     if (classes) {
-        for (unsigned int i = 0; i < total && gSlotCount < RULE_COUNT; i++) {
-            Class cls = classes[i];
-            if (!cls) continue;
-            const char *cn = class_getName(cls);
-            if (!cn) continue;
-            NSString *name = @(cn);
-            if (!IsCandidateClass(name)) continue;
-            cand++;
-            if (HookClass(cls, name)) matched++;
+        @autoreleasepool {
+            for (unsigned int i = 0; i < total && gSlotCount < RULE_COUNT; i++) {
+                Class cls = classes[i];
+                if (!cls) continue;
+                const char *cn = class_getName(cls);
+                if (!cn) continue;
+                NSString *name = @(cn);
+                if (!IsCandidateClass(name)) continue;
+                cand++;
+                if (HookClass(cls, name)) matched++;
+            }
         }
         free(classes);
     }
@@ -255,72 +278,9 @@ static void ScanClasses(void) {
     }
 }
 
-#pragma mark - NSDictionary 拦截
-
-typedef struct { Class cls; IMP orig; } DictSlot;
-static DictSlot gDictSlots[16];
-static int      gDictCount = 0;
-static BOOL     gDictHooking = NO;
-
-static BOOL KeyWanted(id key) {
-    if (![key isKindOfClass:[NSString class]]) return NO;
-    NSString *low = [(NSString *)key lowercaseString];
-    return ([low containsString:@"ecpm"] || [low containsString:@"cpm"] ||
-            [low containsString:@"price"] || [low containsString:@"bid"] ||
-            [low containsString:@"revenue"]);
-}
-
-static id DictHookIMP(id self, SEL cmd, id key) {
-    IMP orig = NULL;
-    Class c = object_getClass(self);
-    for (int i = 0; i < gDictCount; i++) {
-        if (gDictSlots[i].cls == c) { orig = gDictSlots[i].orig; break; }
-    }
-    if (!orig) {
-        Class k = c;
-        while (k) {
-            Method m = class_getInstanceMethod(k, cmd);
-            IMP imp = m ? method_getImplementation(m) : NULL;
-            if (imp && imp != (IMP)DictHookIMP) { orig = imp; break; }
-            k = class_getSuperclass(k);
-        }
-    }
-    if (!orig) return nil;
-
-    id v = ((id (*)(id, SEL, id))orig)(self, cmd, key);
-    if (gEnabled && KeyWanted(key) && [v isKindOfClass:[NSNumber class]]) {
-        gWrites++;
-        gLastHit = [NSString stringWithFormat:@"<dict>.%@", key];
-        return @(ModeValue([v doubleValue]));
-    }
-    return v;
-}
-
-static void HookDictClass(Class cls) {
-    if (!cls || gDictCount >= 16) return;
-    unsigned int mc = 0;
-    Method *ms = class_copyMethodList(cls, &mc);
-    if (!ms) return;
-    for (unsigned int i = 0; i < mc; i++) {
-        if (strcmp(sel_getName(method_getName(ms[i])), "objectForKey:") != 0) continue;
-        if (method_getImplementation(ms[i]) == (IMP)DictHookIMP) break;
-        IMP orig = method_setImplementation(ms[i], (IMP)DictHookIMP);
-        if (!orig || orig == (IMP)DictHookIMP) break;
-        gDictSlots[gDictCount].cls  = cls;
-        gDictSlots[gDictCount].orig = orig;
-        gDictCount++;
-        break;
-    }
-    free(ms);
-}
-
-static void HookDictionaries(void) {
-    if (gDictHooking) return;
-    gDictHooking = YES;
-    NSArray *names = @[ @"__NSDictionaryI", @"__NSDictionaryM", @"__NSDictionary0",
-                        @"__NSCFDictionary", @"NSDictionary" ];
-    for (NSString *n in names) HookDictClass(NSClassFromString(n));
-}
+// 注意：v3.8.1 起彻底不挂 NSDictionary -objectForKey:。
+// 上一版就是这么闪退的：hook 之后 NSUserDefaults / CFPreferences 读字典时
+// 找不到对应子类的原 IMP 返回 nil，调用方直接崩。只挂广告 SDK 的 getter。
 
 #pragma mark - 面板
 
@@ -414,9 +374,27 @@ static EcpmPanel *gPanel = nil;
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panBall:)];
     [b addGestureRecognizer:pan];
 
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(toggleSafe:)];
+    lp.minimumPressDuration = 0.8;
+    [b addGestureRecognizer:lp];
+
     self.ball = b;
     self.win = w;
     w.hidden = NO;
+}
+
+// 长按球 = 安全模式开关（只挂旧表 9 条，闪退时用来定位）
+- (void)toggleSafe:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    gSafeMode = !gSafeMode;
+    [NSUserDefaults.standardUserDefaults setBool:gSafeMode forKey:@"EcpmCtrl38.safe"];
+    ResetHooks();
+    if (gLogOn) NSLog(@"[eCPM] 安全模式 %@", gSafeMode ? @"开" : @"关");
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        ScanClasses();
+        dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf refresh]; });
+    });
 }
 
 - (void)openCard {
@@ -516,14 +494,19 @@ static EcpmPanel *gPanel = nil;
 }
 
 - (void)refresh {
-    self.line0.text = [NSString stringWithFormat:@"范围：28万表   模式：%@   日志：%@",
-                       (gMode == 0 ? @"替换" : @"叠加"), (gLogOn ? @"开" : @"关")];
+    self.line0.text = [NSString stringWithFormat:@"范围：28万表   模式：%@   日志：%@%@",
+                       (gMode == 0 ? @"替换" : @"叠加"), (gLogOn ? @"开" : @"关"),
+                       (gSafeMode ? @"   安全模式" : @"")];
     self.line1.text = [NSString stringWithFormat:@"范围：28万表80条（旧9+新71）· 类%ld／%ld · 已挂%d/80",
                        gMatchedClasses, gCandidateClasses, gSlotCount];
     self.line2.text = [NSString stringWithFormat:@"旧表9条 %ld/9", gLegacyHooked];
     self.line3.text = [NSString stringWithFormat:@"%@=%.0f", (gMode == 0 ? @"替换" : @"叠加"), gValue];
     self.line4.text = [NSString stringWithFormat:@"命中%ld · 已改写%ld", gHits, gWrites];
-    self.line5.text = [NSString stringWithFormat:@"最近 %@", gLastHit];
+    if (gLastSel[0]) {
+        self.line5.text = [NSString stringWithFormat:@"最近 %s.%s", gLastCls, gLastSel];
+    } else {
+        self.line5.text = @"最近 —";
+    }
 }
 
 - (void)panBall:(UIPanGestureRecognizer *)g {
@@ -560,7 +543,6 @@ static EcpmPanel *gPanel = nil;
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         ScanClasses();
-        HookDictionaries();
         dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf refresh]; });
     });
 
@@ -583,8 +565,11 @@ static EcpmPanel *gPanel = nil;
 }
 
 - (void)rescan {
-    ScanClasses();
-    HookDictionaries();
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        ScanClasses();
+        dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf refresh]; });
+    });
     [self refresh];
     if (gLogOn) NSLog(@"[eCPM] 重新扫描 已挂 %d/80", gSlotCount);
 }
@@ -599,8 +584,9 @@ static EcpmPanel *gPanel = nil;
     NSString *msg =
         @"新功能版本 7.3.9 · 2周前\n"
         @"· 28万表并集整理完成，旧表9条并入，共80条\n"
-        @"· 字典层 ecpm/cpm/price/bid/revenue 同步拦截\n"
         @"· 命中/改写计数与最近命中项实时刷新\n\n"
+        @"v3.8.1 · 移除 NSDictionary hook（点应用闪退修复）\n"
+        @"         · 长按球 = 安全模式（只挂旧表9条）\n"
         @"v3.8 · 支持 ABUAdPackage、BaiduMobAd\n"
         @"v3.7 · 增加叠加模式\n"
         @"v3.6 · 穿山甲 / 优量汇 / 快手通杀\n"
@@ -629,13 +615,13 @@ __attribute__((constructor)) static void EcpmInit(void) {
         gMode    = [d integerForKey:kDefMode];
         gEnabled = [d boolForKey:kDefOn];
         if ([d objectForKey:kDefLog]) gLogOn = [d boolForKey:kDefLog];
+        gSafeMode = [d boolForKey:@"EcpmCtrl38.safe"];
         if (gValue <= 0) gValue = 50000.0;
 
         [[EcpmPanel shared] showBubble];
 
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             ScanClasses();
-            HookDictionaries();
             dispatch_async(dispatch_get_main_queue(), ^{ [[EcpmPanel shared] refresh]; });
         });
 
