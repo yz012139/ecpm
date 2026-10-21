@@ -31,6 +31,18 @@ static long long hookQ(id self, SEL _cmd) { gHits++; return (long long)applyValu
 static int    hookI(id self, SEL _cmd) { gHits++; return (int)applyValue(0); }
 static id     hookN(id self, SEL _cmd) { gHits++; return @( applyValue(0) ); }
 
+// ---- setter 专用：把传进来的值直接改掉 ----
+static void hookSetD(id self, SEL _cmd, double v) { gHits++; }
+static void hookSetF(id self, SEL _cmd, float v)  { gHits++; }
+static void hookSetId(id self, SEL _cmd, id v) {
+    gHits++;
+    // 什么都不做：把外部赋值吞掉，让对象自己保留默认/上次值
+}
+static void hookSetNum(id self, SEL _cmd, id v) {
+    gHits++;
+    // 吞掉赋值
+}
+
 static BOOL isCandidateName(NSString *n) {
     static NSArray *prefixes;
     static dispatch_once_t once;
@@ -43,7 +55,7 @@ static BOOL isCandidateName(NSString *n) {
 
 static BOOL isCandidateSel(NSString *s) {
     NSString *low = s.lowercaseString;
-    if ([low hasPrefix:@"set"] || [low containsString:@"init"] || [low containsString:@"dealloc"]) return NO;
+    if ([low containsString:@"init"] || [low containsString:@"dealloc"]) return NO;
     return ([low containsString:@"ecpm"] || [low containsString:@"cpm"] ||
             [low containsString:@"price"] || [low containsString:@"bid"] ||
             [low containsString:@"revenue"]);
@@ -70,11 +82,19 @@ static void scanClasses(void) {
                 const char *types = method_getTypeEncoding(methods[j]);
                 if (!types || !types[0]) continue;
                 char rt = types[0];
-                if (rt == 'd') { method_setImplementation(methods[j], (IMP)hookD); n++; }
+                BOOL isSetter = [selStr hasPrefix:@"set"] && selStr.length > 4;
+                if (isSetter) {
+                    char at = 0;
+                    char *atp = method_copyArgumentType(methods[j], 2);
+                    if (atp) { at = atp[0]; free(atp); }
+                    if (at == 'd') { method_setImplementation(methods[j], (IMP)hookSetD); n++; }
+                    else if (at == 'f') { method_setImplementation(methods[j], (IMP)hookSetF); n++; }
+                    else if (at == '@') { method_setImplementation(methods[j], (IMP)hookSetId); n++; }
+                }
+                else if (rt == 'd') { method_setImplementation(methods[j], (IMP)hookD); n++; }
                 else if (rt == 'f') { method_setImplementation(methods[j], (IMP)hookF); n++; }
                 else if (rt == 'q') { method_setImplementation(methods[j], (IMP)hookQ); n++; }
                 else if (rt == 'i') { method_setImplementation(methods[j], (IMP)hookI); n++; }
-                /* 返回对象（'@'）的方法一律不碰：类型对不上会直接把 App 弄崩 */
             }
             free(methods);
             if (n) { clsCount++; gHooked += n; }
