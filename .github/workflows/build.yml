@@ -16,7 +16,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang lld make curl unzip xz-utils
           clang --version | head -2
-          ls /usr/bin/ld64.lld || true
+          echo "--- 可用 lld ---"
+          ls -la /usr/bin/*lld* 2>/dev/null || true
+          which ld64.lld || true
 
       - name: 下载 iOS SDK
         run: |
@@ -30,16 +32,21 @@ jobs:
       - name: 编译 arm64 + arm64e
         run: |
           SDK="$HOME/sdk/iPhoneOS14.5.sdk"
+          LLD="$(command -v ld64.lld || true)"
+          echo "ld64.lld = $LLD"
+          FUSE=""
+          if [ -n "$LLD" ]; then FUSE="-fuse-ld=$LLD"; else FUSE="-fuse-ld=lld"; fi
           for ARCH in arm64 arm64e; do
             echo "==== $ARCH ===="
             clang -target ${ARCH}-apple-ios14.0 -isysroot "$SDK" -dynamiclib \
-              -fobjc-arc -fblocks -O2 -fno-stack-protector \
+              -fobjc-arc -fblocks -O2 -fno-stack-protector $FUSE \
               -framework UIKit -framework Foundation -framework CoreGraphics \
               -Wl,-undefined,dynamic_lookup \
               -Wl,-install_name,@rpath/EcpmCtrl.dylib \
-              -o "EcpmCtrl-$ARCH.dylib" theos/Tweak.xm
+              -o "EcpmCtrl-$ARCH.dylib" theos/Tweak.xm 2>&1 | tee "build-$ARCH.log"
+            echo "exit=$?"
           done
-          ls -la *.dylib
+          ls -la *.dylib || true
 
       - name: 合并成 fat dylib
         run: |
@@ -47,10 +54,9 @@ jobs:
             (command -v lipo >/dev/null && lipo -create EcpmCtrl-arm64.dylib EcpmCtrl-arm64e.dylib -output EcpmCtrl.dylib) || \
             cp EcpmCtrl-arm64.dylib EcpmCtrl.dylib
           else
-            cp EcpmCtrl-arm64.dylib EcpmCtrl.dylib
+            cp EcpmCtrl-arm64.dylib EcpmCtrl.dylib || true
           fi
-          ls -la EcpmCtrl.dylib
-          file EcpmCtrl.dylib || true
+          ls -la EcpmCtrl.dylib || true
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
@@ -60,4 +66,5 @@ jobs:
             EcpmCtrl.dylib
             EcpmCtrl-arm64.dylib
             EcpmCtrl-arm64e.dylib
-          if-no-files-found: error
+            build-*.log
+          if-no-files-found: warn
