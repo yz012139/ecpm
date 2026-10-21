@@ -64,7 +64,7 @@
 }
 
 - (void)productsRequest:(SKProductsRequest *)request didReceiveResponse:(SKProductsResponse *)response {
-    NSArray *sorted = [response.products sortedUsingComparator:^NSComparisonResult(SKProduct *a, SKProduct *b) {
+    NSArray *sorted = [response.products sortedArrayUsingComparator:^NSComparisonResult(SKProduct *a, SKProduct *b) {
         return [a.price compare:b.price];
     }];
     self.products = sorted;
