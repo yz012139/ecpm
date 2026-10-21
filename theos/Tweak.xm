@@ -422,8 +422,14 @@ static EcpmPanel *gPanel = nil;
     if (!self.card) [self buildCard];
     gPrevKeyWindow = UIApplication.sharedApplication.keyWindow;
     self.card.hidden = NO;
-    [self.card makeKeyAndVisible];
+    // 不抢 key window：只在点输入框时才 makeKeyWindow，避免广告全屏 VC 被我们的窗口接管
     [self refresh];
+}
+
+- (void)textFieldDidBeginEditing:(UITextField *)tf {
+    UIWindow *k = UIApplication.sharedApplication.keyWindow;
+    if (k != self.card) gPrevKeyWindow = k;
+    [self.card makeKeyWindow];
 }
 
 - (void)buildCard {
@@ -570,6 +576,7 @@ static EcpmPanel *gPanel = nil;
     gValue = self.field.text.doubleValue;
     gEnabled = YES;
     [self.field resignFirstResponder];
+    if (gPrevKeyWindow && gPrevKeyWindow != self.card) [gPrevKeyWindow makeKeyWindow];
 
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
     [d setDouble:gValue forKey:kDefValue];
@@ -654,6 +661,7 @@ static EcpmPanel *gPanel = nil;
         @"新功能版本 7.3.9 · 2周前\n"
         @"· 28万表并集整理完成，旧表9条并入，共80条\n"
         @"· 命中/改写计数与最近命中项实时刷新\n\n"
+        @"v3.8.4 · 面板不再抢 key window，只在点输入框时接管键盘\n"
         @"v3.8.3 · 只ecpm模式再排除领奖/校验/上报类，不挂类方法\n"
         @"         · 补扫间隔 12 秒，减少反复扫描\n"
         @"v3.8.2 · 新增范围切换（全部/只ecpm/安全）与「还原全部」\n"
